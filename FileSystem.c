@@ -9,6 +9,7 @@
 #include "filesystem.h"
 #include "cadenas.h"
 #include <errno.h>
+#include <math.h>
 
 int createHardFile(char* path) {
     char comando[512] = {0};
@@ -111,7 +112,7 @@ void printMBR(char *path) {
     quitarComillas(path);
     disk = fopen(path, "rb+");
     if (disk == NULL)
-        return -1;
+        return;
 
     fseek(disk, 0, SEEK_SET);
     fread(&mbr, sizeof(MBR), 1, disk);
@@ -160,7 +161,7 @@ int createPart(char * path, char tipo, int size, char * nombre, char unidad, cha
             && mbr.particiones[2].start == 0
             && mbr.particiones[3].start == 0) {
         //no hay particiones creadas para nada
-        if (tipo == 'l') -4; //no puede crear particiones logicas sin una particion extendida
+        if (tipo == 'l') return -4; //no puede crear particiones logicas sin una particion extendida
 
         mbr.particiones[0].type = tipo;
         mbr.particiones[0].size = size;
@@ -600,4 +601,216 @@ void printIdList(IDLIST *lista) {
 
         printf("Id: %s -- Name: %s -- Path: %s\n", lista->ids[i].id, lista->ids[i].name, lista->ids[i].path);
     }
+}
+
+int makeFileSystem(IDLIST *lista, char *id, char *type, char fs) {
+    //primero chequeamos que el identificador si concuerde con un identificador en la lista:
+    char path[128] = {0};
+    char name[32] = {0};
+    int flag = 0;
+    for (int i = 0; i < 400; i++) {
+        if (!strcmp(id, lista->ids[i].id)) {
+            strcpy(path, lista->ids[i].path);
+            strcpy(name, lista->ids[i].name);
+            flag = 1;
+            break;
+        }
+    }
+
+    if (flag == 0) return -1; //el identificador no se encontraba en la lista
+
+    //si el identificador si se encontraba en la lista ejecutamos empezando con el fast o full:
+    //antes chequeamos que si haya una particion con ese nombre
+    MBR *mbr = readMBR(path);
+    int index  = -1;
+    for (int j = 0; j < 4; j++) {
+        if (!strcmp(mbr->particiones[j].name, name)) {
+            index = j;
+            break;
+        }
+    }
+    if (index == -1) return -2; //no existe una particion con ese nombre
+
+    if (!strcmp(type, "full")) {
+        int startBit = mbr->particiones[index].start + 1;
+        int pos = mbr->particiones[index].size;
+        int mult = pos/1024;
+        int rest = pos%1024;
+        char buffer[1024] = {0};
+        char buffer2[1] = {0};
+        FILE * writer;
+        writer = fopen(path, "rb+");
+        fseek(writer, startBit, SEEK_SET);
+        for (int i = 0; i < mult; i++)
+            fwrite(&buffer, 1024, 1, writer);
+        for (int j = 0; j < rest; j++)
+            fwrite(&buffer2, 1, 1, writer);
+        fflush(writer);
+        fclose(writer);
+    }
+
+    //una vez los datos borrados, entonces meto el sistema de archivos
+    //empezamos por encontrar el numero de inodos y el numero de bloques
+    int inodesCount = 0;
+    int x = mbr->particiones[index].size;
+    int a = sizeof(SUPERBLOQUE);
+    int i = sizeof(INODE);
+    int b = 64;
+    int j = sizeof(JOURNAL);
+    int n  = 0;
+    if (fs == 2)
+        n = (x - a) / (4 + i + 3*b);
+    else
+        n = (x- a) / (4 + i + 3*b + j);
+
+    inodesCount = floor(n);
+
+    createFileSystem(path, mbr->particiones[index].start+1, fs, inodesCount);
+
+    //vaciamos path y name antes de terminar
+    memset(path, 0, 128);
+    memset(path, 0, 32);
+
+    return 1; //el formateo fue realizado con exito
+}
+
+MBR* readMBR(char *path) {
+    MBR *mbr = NULL;
+    FILE *disk;
+    disk = fopen(path, "rb+");
+    if (disk == NULL)
+        return NULL; //no existe el disco al que intenta acceder
+
+    fseek(disk, 0, SEEK_SET);
+    fread(mbr, sizeof(MBR), 1, disk);
+    fclose(disk);
+    return mbr;
+}
+
+void createFileSystem(char *path, int start, int type, int inodesCount) {
+    int blocksCount = 3 * inodesCount;
+    char inodesTable[inodesCount];
+    char blocksTable[blocksCount];
+
+    for (int j = 0; j < inodesCount; j++)
+        inodesTable[j] = '0';
+    for (int i = 0; i < blocksCount; i++)
+        blocksTable[i] = '0';
+    inodesTable[0] = '1';
+    blocksTable[0] = '1';
+
+    FILE *disk;
+
+    SUPERBLOQUE super = generateSuperBlock(inodesCount, type);
+    INODE rootInode = generateInode(1, 1, 0, 0, 700);
+    rootInode.block[0] = 0;
+    INODE inode = generateInode(-1, -1, 0, -1, 0);
+    DIRECTORYBLOCK block = generateDirectoryBlock();
+    DIRECTORYBLOCK rootBlock = generateDirectoryBlock();
+    rootBlock.content[0].inode = 0;
+    rootBlock.content[1].inode = 0;
+    strcpy(rootBlock.content[0].name, "/");
+    strcpy(rootBlock.content[1].name, "/");
+
+    if (type == 2) {
+        //el orden es: superBloque, bm inodos, bm bloques, inodos, bloques
+
+        disk = fopen(path, "rb+");
+        fseek(disk, start, SEEK_SET);
+        fwrite(&super, sizeof(SUPERBLOQUE), 1, disk);
+        fwrite(&inodesTable, inodesCount, 1, disk);
+        fwrite(&blocksTable, blocksCount, 1, disk);
+        fwrite(&rootInode, sizeof(INODE), 1, disk);
+        for (int i = 0; i < inodesCount - 1; i++)
+            fwrite(&inode, sizeof(INODE), 1, disk);
+        fwrite(&rootBlock, sizeof(DIRECTORYBLOCK), 1, disk);
+        for (int j = 0; j < blocksCount - 1; j++)
+            fwrite(&block, sizeof(DIRECTORYBLOCK), 1, disk);
+        fflush(disk);
+        fclose(disk);
+    }
+    else {
+        //superbloque, journaling, bm inodos, bm bloques, inodos, bloques
+
+        JOURNAL journal = generateJournal();
+        disk = fopen(path, "rb+");
+        fseek(disk, start, SEEK_SET);
+        fwrite(&super, sizeof(SUPERBLOQUE), 1, disk);
+        for (int k = 0; k < inodesCount; k++)
+            fwrite(&journal, sizeof(JOURNAL), 1, disk);
+        fwrite(&inodesTable, inodesCount, 1, disk);
+        fwrite(&blocksTable, blocksCount, 1, disk);
+        fwrite(&rootInode, sizeof(INODE), 1, disk);
+        for (int i = 0; i < inodesCount - 1; i++)
+            fwrite(&inode, sizeof(INODE), 1, disk);
+        fwrite(&rootBlock, sizeof(DIRECTORYBLOCK), 1, disk);
+        for (int j = 0; j < blocksCount; j++)
+            fwrite(&block, sizeof(DIRECTORYBLOCK), 1, disk);
+        fflush(disk);
+        fclose(disk);
+    }
+}
+
+SUPERBLOQUE generateSuperBlock(int inodesCount, int type) {
+    SUPERBLOQUE super_bloque;
+    super_bloque.magic = 201403905;
+    super_bloque.systemType = type;
+    super_bloque.inodesCount = inodesCount;
+    super_bloque.blocksCount = 3*inodesCount;
+    super_bloque.freeInodesCount = inodesCount - 1;
+    super_bloque.freeBlocksCount = (3*inodesCount) - 1;
+    super_bloque.inodeSize = sizeof(INODE);
+    super_bloque.blockSize = 64;
+    super_bloque.firstInode = 1;
+    super_bloque.firstBlock = 1;
+    super_bloque.bmInodeStart = (start - 1) + sizeof(SUPERBLOQUE); //exclusivo
+    super_bloque.bmBlockStart = (start - 1) + sizeof(SUPERBLOQUE) + inodesCount; //exclusivo
+    super_bloque.inodeStart = (start - 1) + sizeof(SUPERBLOQUE) + inodesCount + blocksCount; //exclusivo
+    super_bloque.blockStart = (start - 1) + sizeof(SUPERBLOQUE) + inodesCount + blocksCount + sizeof(INODE)*inodesCount; //exclusivo
+    super_bloque.mountCount = 1;
+    timer_t hora;
+    time(&hora);
+    struct tm *local = localtime(&hora);
+    strftime(super_bloque.mTime, 16, "%d/%m/%y %H%M", local);
+    memset(super_bloque.unTime, 0, 16);
+    return super_bloque;
+}
+
+INODE generateInode(int uid, int gid, int size, int type, int perm) {
+    INODE inode;
+    inode.uid = uid;
+    inode.gid = gid;
+    inode.size = size;
+    memset(inode.readDate, 0, 16);
+    timer_t hora;
+    time(&hora);
+    struct tm *local = localtime(&hora);
+    strftime(inode.createDate, 16, "%d/%m/%y %H%M", local);
+    memset(inode.modDate, 0, 16);
+    for (int i = 0; i < 16; i++) {
+        inode.block[i] = -1;
+    }
+    inode.type = type;
+    inode.perm = perm;
+    return inode;
+}
+
+DIRECTORYBLOCK generateDirectoryBlock() {
+    DIRECTORYBLOCK directory;
+    for (int i = 0; i < 4; i++) {
+        directory.content[i].inode = -1;
+        memset(directory.content[i].name, 12, 0);
+    }
+    return directory;
+}
+
+JOURNAL generateJournal() {
+    JOURNAL journal;
+    journal.operationType = 0;
+    journal.type = -1;
+    memset(journal.name, 0, 16);
+    journal.content = 0;
+    memset(journal.date, 0, 16);
+    memset(journal.owner, 0, 11);
+    journal.permissions = 0;
 }

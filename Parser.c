@@ -5,6 +5,7 @@
 #include <errno.h>
 #include "parser.h"
 #include "respuestas.h"
+#include "filesystem.h"
 
 
 char** split_string(char * comando, char * divisor) {
@@ -403,7 +404,7 @@ int report(char **comando) {
     return response;
 }
 
-int mkfs(char **comando) {
+int mkfs(char **comando, IDLIST *lista) {
     char id[10] = {0};
     char type[10] = {0};
     strcpy(type, "full");
@@ -432,6 +433,18 @@ int mkfs(char **comando) {
     if (strcmp(type, "fast") != 0 && strcmp(type, "full") != 0) return -2; //valores incorrectos para tipo
     if (strcmp(fs, "3fs") != 0 && strcmp(fs, "2fs") != 0) return -3; //valores incorrectos para fs
 
+    //si pasa todas la validaciones entonces ejecutamos el metodo
+    char f = 2;
+    if (!strcmp(fs, "3fs")) f = 3;
+    int madeFileSystem = makeFileSystem(lista, id, type, f);
+
+
+    //al final limpiamos todo
+    for (int i = 0; i < 10; i++) {
+        id[i] = 0;
+        type[i] = 0;
+        fs[i] = 0;
+    }
     return 1;
 }
 
@@ -547,7 +560,7 @@ int chmod(char **comando) {
 
     char ** runner = comando;
     while(*runner) {
-        if (!strcmp(*parametro, "-r")) {
+        if (!strcmp(*runner, "-r")) {
             r = 1;
             runner++;
             continue;
@@ -580,7 +593,7 @@ int mkfile(char **comando) {
 
     char ** runner = comando;
     while(*runner) {
-        if (!strcmp(*parametro, "-p")) {
+        if (!strcmp(*runner, "-p")) {
             p = 1;
             runner++;
             continue;
@@ -677,7 +690,7 @@ int ren(char **comando) {
         }
         else if (!strcmp(*parametro, "-name")) {
             parametro++;
-            strcpy(name, *parametro;)
+            strcpy(name, *parametro);
         }
         else {
             return -1; //el parametro no pertenece al comando

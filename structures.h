@@ -40,5 +40,63 @@ typedef struct idList {
     int correlatives[26];
 } IDLIST;
 
+typedef struct SuperBloque {
+    int systemType;
+    int inodesCount;
+    int blocksCount;
+    int freeBlocksCount;
+    int freeInodesCount;
+    char mTime[16];
+    char unTime[16];
+    int mountCount;
+    int magic;
+    int inodeSize;
+    int blockSize;
+    int firstInode;
+    int firstBlock;
+    int bmInodeStart;
+    int bmBlockStart;
+    int inodeStart;
+    int blockStart;
+} SUPERBLOQUE;
+
+typedef struct Journal {
+    int operationType;
+    int type;
+    char name[16];
+    int content;
+    char date[16];
+    char owner[11];
+    int permissions;
+} JOURNAL;
+
+typedef struct InodesTable{
+    int uid;
+    int gid;
+    int size;
+    char readDate[16];
+    char createDate[16];
+    char modDate[16];
+    int block[15];
+    char type;
+    int perm;
+} INODE;
+
+typedef struct content {
+    char name[13];
+    int inode;
+} CONTENT;
+
+typedef struct BloqueCarpetas {
+    CONTENT content[4];
+} DIRECTORYBLOCK;
+
+typedef struct filesBlock {
+    char content[64];
+} FILESBLOCK;
+
+typedef struct pointersBlock {
+    int pointers[16];
+} POINTERSBLOCK;
 
 #endif

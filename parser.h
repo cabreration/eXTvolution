@@ -14,7 +14,7 @@ int unmount(char** comando, IDLIST *lista);
 
 int report(char** comando);
 
-int mkfs(char **comando);
+int mkfs(char **comando, IDLIST *lista);
 
 int login(char **comando);
 
